@@ -1,0 +1,11 @@
+{
+  "consents": {
+    "analytics": true,
+    "marketing": false,
+    "social": false
+  },
+  "confirmed": true,
+  "timestamp": "2025-05-21T12:00:00.000Z",
+  "userId": "anonymous-user-id",
+  "version": "1.0"
+}
