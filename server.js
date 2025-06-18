@@ -1,6 +1,6 @@
 /**
  * Consent Cryptographic Server
- * Handles secure consent processing with Diffie-Hellman key exchange
+ * Handles secure consent processing with RSA key exchange
  * and RSA digital signatures for authentication
  */
 
@@ -13,7 +13,6 @@ const cryptoUtils = require('./crypto-utils');
 // Configuration
 const CONFIG = {
 	PORT: process.env.PORT || 3000,
-	DH_GROUP: 'modp14', // 2048-bit security
 	RSA_KEY_SIZE: 2048,
 	CORS_ORIGIN: '*' // Restrict in production
 };
@@ -22,9 +21,8 @@ class ConsentCryptoServer {
 	constructor() {
 		this.app = express();
 		this.serverKeys = {
-			dhParams: null,
-			dhPrivateKey: null,
-			dhPublicKey: null,
+			rsaPrivateKeyExchangeKey: null,
+			rsaPublicKeyExchangeKey: null,
 			rsaPrivateSigningKey: null,
 			rsaPublicSigningKey: null
 		};
@@ -38,14 +36,14 @@ class ConsentCryptoServer {
 	 * Initialize server cryptographic keys
 	 */
 	initializeKeys() {
-		console.log('🔐 Initializing server cryptographic keys...');
+		console.log('* Initializing server cryptographic keys...');
 
 		try {
-			// Generate Diffie-Hellman parameters and keys
-			this.generateDHKeys();
+			// Generate RSA key exchange key pair
+			this.generateRSAKeyExchangeKeys();
 
 			// Generate RSA signing key pair
-			this.generateRSAKeys();
+			this.generateRSASigningKeys();
 
 			console.log('✅ Server keys initialized successfully');
 		} catch (error) {
@@ -55,25 +53,31 @@ class ConsentCryptoServer {
 	}
 
 	/**
-	 * Generate Diffie-Hellman key pair
+	 * Generate RSA key pair for key exchange (encryption/decryption)
 	 */
-	generateDHKeys() {
-		// Use predefined DH group for security and compatibility
-		const dhGroup = crypto.getDiffieHellman(CONFIG.DH_GROUP);
-		dhGroup.generateKeys();
+	generateRSAKeyExchangeKeys() {
+		const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
+			modulusLength: CONFIG.RSA_KEY_SIZE,
+			publicKeyEncoding: {
+				type: 'spki',
+				format: 'pem'
+			},
+			privateKeyEncoding: {
+				type: 'pkcs8',
+				format: 'pem'
+			}
+		});
 
-		this.serverKeys.dhParams = dhGroup;
-		this.serverKeys.dhPrivateKey = dhGroup.getPrivateKey();
-		this.serverKeys.dhPublicKey = dhGroup.getPublicKey();
+		this.serverKeys.rsaPrivateKeyExchangeKey = privateKey;
+		this.serverKeys.rsaPublicKeyExchangeKey = publicKey;
 
-		console.log(`📊 DH Group: ${CONFIG.DH_GROUP}`);
-		console.log(`🔑 DH Public Key Length: ${this.serverKeys.dhPublicKey.length} bytes`);
+		console.log(`🔑 RSA Key Exchange Size: ${CONFIG.RSA_KEY_SIZE} bits`);
 	}
 
 	/**
 	 * Generate RSA key pair for digital signatures
 	 */
-	generateRSAKeys() {
+	generateRSASigningKeys() {
 		const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
 			modulusLength: CONFIG.RSA_KEY_SIZE,
 			publicKeyEncoding: {
@@ -89,7 +93,7 @@ class ConsentCryptoServer {
 		this.serverKeys.rsaPrivateSigningKey = privateKey;
 		this.serverKeys.rsaPublicSigningKey = publicKey;
 
-		console.log(`📝 RSA Key Size: ${CONFIG.RSA_KEY_SIZE} bits`);
+		console.log(`📝 RSA Signing Key Size: ${CONFIG.RSA_KEY_SIZE} bits`);
 	}
 
 	/**
@@ -106,7 +110,7 @@ class ConsentCryptoServer {
 
 		// Request logging
 		this.app.use((req, res, next) => {
-			console.log(`📨 ${req.method} ${req.path} - ${new Date().toISOString()}`);
+			console.log(`* ${req.method} ${req.path} - ${new Date().toISOString()}`);
 			next();
 		});
 	}
@@ -115,15 +119,15 @@ class ConsentCryptoServer {
 	 * Setup API routes
 	 */
 	setupRoutes() {
-		// Get DH parameters for client key exchange
-		this.app.get('/api/dhparams', (req, res) => {
+		// Get RSA public key for client key exchange
+		this.app.get('/api/publickey', (req, res) => {
 			try {
-				const dhParams = this.getDHParametersForClient();
-				res.json(dhParams);
-				console.log('📤 DH parameters sent to client');
+				const publicKeyData = this.getPublicKeyForClient();
+				res.json(publicKeyData);
+				console.log('📤 RSA public key sent to client');
 			} catch (error) {
-				console.error('❌ Error sending DH parameters:', error);
-				res.status(500).json({ error: 'Failed to get DH parameters' });
+				console.error('❌ Error sending RSA public key:', error);
+				res.status(500).json({ error: 'Failed to get RSA public key' });
 			}
 		});
 
@@ -169,18 +173,17 @@ class ConsentCryptoServer {
 	}
 
 	/**
-	 * Get DH parameters for client
-	 * @returns {Object} DH parameters (prime, generator, server public key)
+	 * Get RSA public key for client
+	 * @returns {Object} RSA public key information
 	 */
-	getDHParametersForClient() {
-		if (!this.serverKeys.dhParams) {
+	getPublicKeyForClient() {
+		if (!this.serverKeys.rsaPublicKeyExchangeKey) {
 			throw new Error('Server keys not initialized');
 		}
 
 		return {
-			prime: this.serverKeys.dhParams.getPrime().toString('hex'),
-			generator: this.serverKeys.dhParams.getGenerator().toString('hex'),
-			publicKey: this.serverKeys.dhPublicKey.toString('hex')
+			publicKey: this.serverKeys.rsaPublicKeyExchangeKey,
+			keySize: CONFIG.RSA_KEY_SIZE
 		};
 	}
 
@@ -195,30 +198,26 @@ class ConsentCryptoServer {
 
 		const {
 			encryptedConsent,
-			clientPublicKey,
+			encryptedSymmetricKey,
 			clientSignature,
 			clientPublicSigningKey
 		} = clientPackage;
 
 		console.log('🔍 Validating client package...');
 
-		// Step 1: Compute shared secret using DH
-		const sharedSecret = this.computeSharedSecret(clientPublicKey);
-		console.log('🤝 Shared secret computed');
+		// Step 1: Decrypt the symmetric key using server's RSA private key
+		const symmetricKey = this.decryptSymmetricKey(encryptedSymmetricKey);
+		console.log('🔓 Symmetric key decrypted');
 
-		// Step 2: Derive symmetric encryption key
-		const symmetricKey = cryptoUtils.generateSymmetricKey(sharedSecret);
-		console.log('🔑 Symmetric key derived');
-
-		// Step 3: Verify client's digital signature
+		// Step 2: Verify client's digital signature
 		this.verifyClientSignature(encryptedConsent, clientSignature, clientPublicSigningKey);
 		console.log('✅ Client signature verified');
 
-		// Step 4: Decrypt and validate consent
+		// Step 3: Decrypt and validate consent
 		const decryptedConsent = this.decryptAndValidateConsent(symmetricKey, encryptedConsent);
 		console.log('🔓 Consent decrypted:', decryptedConsent);
 
-		// Step 5: Sign the consent with server's key
+		// Step 4: Sign the consent with server's key
 		const serverSignature = this.signConsentData(encryptedConsent);
 		console.log('📝 Server signature generated');
 
@@ -233,7 +232,7 @@ class ConsentCryptoServer {
 	 * Validate client package structure
 	 */
 	validateClientPackage(clientPackage) {
-		const requiredFields = ['encryptedConsent', 'clientPublicKey', 'clientSignature', 'clientPublicSigningKey'];
+		const requiredFields = ['encryptedConsent', 'encryptedSymmetricKey', 'clientSignature', 'clientPublicSigningKey'];
 
 		for (const field of requiredFields) {
 			if (!clientPackage[field]) {
@@ -249,21 +248,22 @@ class ConsentCryptoServer {
 	}
 
 	/**
-	 * Compute DH shared secret
+	 * Decrypt symmetric key using RSA private key
 	 */
-	computeSharedSecret(clientPublicKeyHex) {
+	decryptSymmetricKey(encryptedSymmetricKeyHex) {
 		try {
-			const clientPublicKey = Buffer.from(clientPublicKeyHex, 'hex');
+			const encryptedSymmetricKey = Buffer.from(encryptedSymmetricKeyHex, 'hex');
 
-			// Validate key length (should be same as DH group size)
-			const expectedLength = this.serverKeys.dhPublicKey.length;
-			if (clientPublicKey.length !== expectedLength) {
-				throw new Error(`Invalid client public key length: expected ${expectedLength}, got ${clientPublicKey.length}`);
-			}
+			// Decrypt using RSA-OAEP
+			const decryptedKey = crypto.privateDecrypt({
+				key: this.serverKeys.rsaPrivateKeyExchangeKey,
+				padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+				oaepHash: 'sha256'
+			}, encryptedSymmetricKey);
 
-			return this.serverKeys.dhParams.computeSecret(clientPublicKey);
+			return decryptedKey;
 		} catch (error) {
-			throw new Error(`Failed to compute shared secret: ${error.message}`);
+			throw new Error(`Failed to decrypt symmetric key: ${error.message}`);
 		}
 	}
 
@@ -325,7 +325,7 @@ class ConsentCryptoServer {
 		this.app.listen(CONFIG.PORT, () => {
 			console.log('\n🚀 Consent Cryptographic Server Started');
 			console.log(`📡 Server listening on port ${CONFIG.PORT}`);
-			console.log(`🔒 Security: DH ${CONFIG.DH_GROUP} + RSA ${CONFIG.RSA_KEY_SIZE}-bit`);
+			console.log(`🔒 Security: RSA ${CONFIG.RSA_KEY_SIZE}-bit key exchange + RSA ${CONFIG.RSA_KEY_SIZE}-bit signing`);
 			console.log(`🌐 CORS Origin: ${CONFIG.CORS_ORIGIN}`);
 			console.log('─'.repeat(50));
 		});

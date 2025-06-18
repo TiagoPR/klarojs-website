@@ -1,6 +1,11 @@
 // Common cryptographic utilities for both server and client
 const crypto = require('crypto');
 
+// Generate a random symmetric key (32 bytes for AES-256)
+function generateRandomSymmetricKey() {
+	return crypto.randomBytes(32);
+}
+
 // Generate a symmetric key from a shared secret using HKDF
 function generateSymmetricKey(sharedSecret) {
 	// HKDF implementation for key derivation
@@ -24,6 +29,24 @@ function generateSymmetricKey(sharedSecret) {
 	hmac.update(info);
 	hmac.update(Buffer.from([1]));
 	return hmac.digest().slice(0, 32); // 32 bytes = 256 bits
+}
+
+// Encrypt symmetric key with RSA public key
+function encryptSymmetricKey(publicKey, symmetricKey) {
+	return crypto.publicEncrypt({
+		key: publicKey,
+		padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+		oaepHash: 'sha256'
+	}, symmetricKey);
+}
+
+// Decrypt symmetric key with RSA private key
+function decryptSymmetricKey(privateKey, encryptedSymmetricKey) {
+	return crypto.privateDecrypt({
+		key: privateKey,
+		padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+		oaepHash: 'sha256'
+	}, encryptedSymmetricKey);
 }
 
 // Encrypt consent data using AES-GCM with the symmetric key
@@ -112,7 +135,10 @@ function verifySignature(publicKey, data, signature) {
 // Export functions if in Node.js environment
 if (typeof module !== 'undefined' && module.exports) {
 	module.exports = {
+		generateRandomSymmetricKey,
 		generateSymmetricKey,
+		encryptSymmetricKey,
+		decryptSymmetricKey,
 		encryptConsent,
 		decryptConsent,
 		signData,
