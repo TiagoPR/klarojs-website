@@ -159,6 +159,8 @@ class ConsentCryptoServer {
 
 		// Step 2: Sign the consent with server's key
 		const consentDataString = JSON.stringify(consentData);
+		console.log("Server-side data string:", consentDataString);
+
 		const serverSignature = this.signConsentData(consentDataString);
 		console.log('📝 Server signature generated');
 
