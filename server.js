@@ -1,14 +1,12 @@
 /**
- * Consent Cryptographic Server
- * Handles secure consent processing with RSA key exchange
- * and RSA digital signatures for authentication
+ * Consent Cryptographic Server with JWS
+ * Handles secure consent processing with single JWS for entire transaction
  */
 
 const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const cryptoUtils = require('./crypto-utils');
 
 // Configuration
 const CONFIG = {
@@ -104,21 +102,21 @@ class ConsentCryptoServer {
 			}
 		});
 
-		// Process consent from client
+		// Process consent JWS from client
 		this.app.post('/api/consent', (req, res) => {
 			try {
-				console.log('📥 Processing consent package...');
-				const result = this.processClientConsent(req.body);
+				console.log('📥 Processing consent JWS...');
+				const result = this.processClientJWS(req.body.jws);
 
 				res.json({
 					success: true,
-					serverSignature: result.serverSignature,
-					message: 'Signed Consent processed successfully'
+					serverSignedJWS: result.serverSignedJWS,
+					message: 'JWS processed and server-signed successfully'
 				});
 
-				console.log('✅ Consent processed and signed');
+				console.log('✅ JWS processed and server-signed');
 			} catch (error) {
-				console.error('❌ Error processing consent:', error);
+				console.error('❌ Error processing JWS:', error);
 				res.status(400).json({
 					success: false,
 					error: error.message
@@ -137,73 +135,210 @@ class ConsentCryptoServer {
 	}
 
 	/**
-	 * Process encrypted consent package from client
-	 * @param {Object} clientPackage - Encrypted consent package
-	 * @returns {Object} Processing result with server signature
+	 * Process client JWS and return server-signed JWS
+	 * @param {string} clientJWS - JWS from client
+	 * @returns {Object} Processing result with server-signed JWS
 	 */
-	processClientConsent(clientPackage) {
-		// Validate input
-		this.validateClientPackage(clientPackage);
+	processClientJWS(clientJWS) {
+		console.log('🔍 Validating client JWS...');
 
-		const {
-			clientSignature,
-			clientPublicSigningKey,
-			consentData
-		} = clientPackage;
+		// Log the incoming client JWS
+		this.logJWSToken(clientJWS, 'Incoming Client JWS');
 
-		console.log('🔍 Validating client package...');
+		// Step 1: Parse and validate client JWS
+		const clientPayload = this.parseAndValidateClientJWS(clientJWS);
+		console.log('✅ Client JWS verified');
 
-		// Step 1: Verify client's digital signature
-		this.verifyClientSignature(consentData, clientSignature, clientPublicSigningKey);
-		console.log('✅ Client signature verified');
+		// Step 2: Create server-signed JWS with complete transaction data
+		const serverSignedJWS = this.createServerSignedJWS(clientPayload);
+		console.log('📝 Server JWS created');
 
-		// Step 2: Sign the consent with server's key
-		const consentDataString = JSON.stringify(consentData);
-		console.log("Server-side data string:", consentDataString);
-
-		const serverSignature = this.signConsentData(consentDataString);
-		console.log('📝 Server signature generated');
+		// Log the server-signed JWS
+		this.logJWSToken(serverSignedJWS, 'Server-Signed JWS');
 
 		return {
-			serverSignature: serverSignature,
+			serverSignedJWS: serverSignedJWS
 		};
 	}
 
 	/**
-	 * Validate client package structure
+	 * Parse and validate client JWS
 	 */
-	validateClientPackage(clientPackage) {
-		const requiredFields = ['clientSignature', 'clientPublicSigningKey', 'consentData'];
-
-		for (const field of requiredFields) {
-			if (!clientPackage[field]) {
-				throw new Error(`Missing required field: ${field}`);
-			}
+	parseAndValidateClientJWS(jws) {
+		const parts = jws.split('.');
+		if (parts.length !== 3) {
+			throw new Error('Invalid JWS format');
 		}
-	}
 
-	/**
-	 * Verify client's digital signature
-	 */
-	verifyClientSignature(consentData, clientSignature, clientPublicSigningKey) {
-		const consentDataString = JSON.stringify(consentData);
+		const [encodedHeader, encodedPayload, encodedSignature] = parts;
 
-		const isValid = cryptoUtils.verifySignature(
-			clientPublicSigningKey,
-			consentDataString,
-			clientSignature
+		// Decode header
+		const headerBuffer = this.base64UrlDecode(encodedHeader);
+		const header = JSON.parse(headerBuffer.toString());
+
+		if (header.alg !== 'PS256') {
+			throw new Error('Unsupported algorithm');
+		}
+
+		// Decode payload
+		const payloadBuffer = this.base64UrlDecode(encodedPayload);
+		const payload = JSON.parse(payloadBuffer.toString());
+
+		// Verify client signature
+		const signingInput = `${encodedHeader}.${encodedPayload}`;
+		const signatureBuffer = this.base64UrlDecode(encodedSignature);
+
+		const isValid = this.verifyClientSignature(
+			payload.clientPublicKey,
+			signingInput,
+			signatureBuffer
 		);
 
 		if (!isValid) {
-			throw new Error('Invalid client signature - consent may have been tampered with');
+			throw new Error('Invalid client signature');
+		}
+
+		return payload;
+	}
+
+	/**
+	 * Create server-signed JWS containing the complete transaction
+	 */
+	createServerSignedJWS(clientPayload) {
+		// Server JWS Header
+		const serverHeader = {
+			alg: "PS256",
+			typ: "JWT",
+			kid: "server-key"
+		};
+
+		// Server JWS Payload - contains original client payload + server metadata
+		const serverPayload = {
+			...clientPayload, // Include all client data
+			serverTimestamp: Math.floor(Date.now() / 1000),
+			serverIssuer: "consent-server",
+			transactionStatus: "verified"
+		};
+
+		// Encode header and payload
+		const encodedHeader = this.base64UrlEncode(JSON.stringify(serverHeader));
+		const encodedPayload = this.base64UrlEncode(JSON.stringify(serverPayload));
+
+		// Create signing input
+		const signingInput = `${encodedHeader}.${encodedPayload}`;
+
+		// Sign with server private key
+		const signature = this.signData(signingInput);
+		const encodedSignature = this.base64UrlEncode(signature);
+
+		// Return complete server-signed JWS
+		return `${signingInput}.${encodedSignature}`;
+	}
+
+	/**
+	 * Verify client signature using RSA-PSS
+	 */
+	verifyClientSignature(clientPublicKeyPem, signingInput, signatureBuffer) {
+		try {
+			const verify = crypto.createVerify('SHA256');
+			verify.update(signingInput);
+			verify.end();
+
+			return verify.verify(
+				{
+					key: clientPublicKeyPem,
+					padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+					saltLength: 32
+				},
+				signatureBuffer
+			);
+		} catch (error) {
+			console.error('Error verifying client signature:', error);
+			return false;
 		}
 	}
 
 	/**
-	 * Sign consent data with server's RSA key
+	 * Sign data with server private key using RSA-PSS
 	 */
-	signConsentData(consent) {
-		return cryptoUtils.signData(this.serverKeys.rsaPrivateSigningKey, consent);
+	signData(data) {
+		const sign = crypto.createSign('SHA256');
+		sign.update(data);
+		sign.end();
+
+		return sign.sign({
+			key: this.serverKeys.rsaPrivateSigningKey,
+			padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+			saltLength: 32
+		});
+	}
+
+	/**
+	 * Base64 URL encoding (without padding)
+	 */
+	base64UrlEncode(data) {
+		const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+		return buffer.toString('base64')
+			.replace(/\+/g, '-')
+			.replace(/\//g, '_')
+			.replace(/=/g, '');
+	}
+
+	/**
+	 * Base64 URL decoding
+	 */
+	base64UrlDecode(str) {
+		// Add padding if needed
+		str += '='.repeat((4 - str.length % 4) % 4);
+		str = str.replace(/-/g, '+').replace(/_/g, '/');
+		return Buffer.from(str, 'base64');
+	}
+
+	/**
+	 * Pretty print JWS token with decoded header and payload
+	 * @param {string} jws - The JWS token
+	 * @param {string} title - Title for the log output
+	 */
+	logJWSToken(jws, title = 'JWS Token') {
+		console.log(`\n🔍 ${title}:`);
+		console.log('─'.repeat(50));
+
+		// Print the raw JWS token
+		console.log('📄 Raw JWS Token:');
+		console.log(jws);
+		console.log('');
+
+		try {
+			const parts = jws.split('.');
+			if (parts.length !== 3) {
+				console.log('❌ Invalid JWS format');
+				return;
+			}
+
+			const [encodedHeader, encodedPayload, encodedSignature] = parts;
+
+			// Decode and display header
+			const headerBuffer = this.base64UrlDecode(encodedHeader);
+			const header = JSON.parse(headerBuffer.toString());
+			console.log('📋 Header:');
+			console.log(JSON.stringify(header, null, 2));
+
+			// Decode and display payload
+			const payloadBuffer = this.base64UrlDecode(encodedPayload);
+			const payload = JSON.parse(payloadBuffer.toString());
+			console.log('📦 Payload:');
+			console.log(JSON.stringify(payload, null, 2));
+
+			// Display signature info
+			console.log('🔐 Signature:');
+			console.log(`Length: ${encodedSignature.length} characters`);
+			console.log(`Preview: ${encodedSignature.substring(0, 50)}...`);
+
+		} catch (error) {
+			console.error('❌ Error decoding JWS:', error.message);
+		}
+
+		console.log('─'.repeat(50));
 	}
 
 	/**
@@ -211,9 +346,9 @@ class ConsentCryptoServer {
 	 */
 	start() {
 		this.app.listen(CONFIG.PORT, () => {
-			console.log('\n🚀 Consent Cryptographic Server Started');
+			console.log('\n🚀 Consent Cryptographic Server with JWS Started');
 			console.log(`📡 Server listening on port ${CONFIG.PORT}`);
-			console.log(`🔒 Security: RSA ${CONFIG.RSA_KEY_SIZE}-bit key exchange + RSA ${CONFIG.RSA_KEY_SIZE}-bit signing`);
+			console.log(`🔒 Security: JWS with RSA-PSS ${CONFIG.RSA_KEY_SIZE}-bit signatures`);
 			console.log(`🌐 CORS Origin: ${CONFIG.CORS_ORIGIN}`);
 			console.log('─'.repeat(50));
 		});
