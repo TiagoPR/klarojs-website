@@ -189,7 +189,6 @@ class ConsentCryptoServer {
 
 		const serializedData = JSON.stringify(consent);
 
-		console.log('Serialized (server):', JSON.stringify(consent));
 		sign.update(serializedData);
 		sign.end();
 
