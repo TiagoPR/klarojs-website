@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const forge = require('node-forge');
+const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -28,7 +30,7 @@ class ConsentCryptoServer {
 
 		try {
 			// Generate RSA signing key pair
-			this.generateRSASigningKeys();
+			this.loadRSASigningKeys();
 
 			console.log('✅ Server keys initialized successfully');
 		} catch (error) {
@@ -37,18 +39,16 @@ class ConsentCryptoServer {
 		}
 	}
 
-	generateRSASigningKeys() {
-		const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
-			modulusLength: CONFIG.RSA_KEY_SIZE,
-			publicKeyEncoding: {
-				type: 'spki',
-				format: 'pem'
-			},
-			privateKeyEncoding: {
-				type: 'pkcs8',
-				format: 'pem'
-			}
-		});
+	loadRSASigningKeys() {
+		const pem = fs.readFileSync('server.crt', 'utf8');
+		const cert = forge.pki.certificateFromPem(pem);
+		const publicKey = forge.pki.publicKeyToPem(cert.publicKey);
+
+		console.log(publicKey);
+
+		const privateKey = fs.readFileSync('server.key', 'utf8');
+
+		console.log(privateKey);
 
 		this.serverKeys.rsaPrivateSigningKey = privateKey;
 		this.serverKeys.rsaPublicSigningKey = publicKey;
