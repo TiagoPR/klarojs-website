@@ -19,6 +19,7 @@ class ConsentCryptoServer {
 			rsaPrivateSigningKey: null,
 			rsaPublicSigningKey: null
 		};
+		this.serverCert;
 
 		this.setupMiddleware();
 		this.setupRoutes();
@@ -40,8 +41,8 @@ class ConsentCryptoServer {
 	}
 
 	loadRSASigningKeys() {
-		const pem = fs.readFileSync('server.crt', 'utf8');
-		const cert = forge.pki.certificateFromPem(pem);
+		const certPem = fs.readFileSync('server.crt', 'utf8');
+		const cert = forge.pki.certificateFromPem(certPem);
 		const publicKey = forge.pki.publicKeyToPem(cert.publicKey);
 
 		console.log(publicKey);
@@ -52,6 +53,7 @@ class ConsentCryptoServer {
 
 		this.serverKeys.rsaPrivateSigningKey = privateKey;
 		this.serverKeys.rsaPublicSigningKey = publicKey;
+		this.serverCert = certPem;
 
 		console.log(`📝 RSA Signing Key Size: ${CONFIG.RSA_KEY_SIZE} bits`);
 	}
@@ -74,14 +76,14 @@ class ConsentCryptoServer {
 
 	setupRoutes() {
 		// Get RSA public key for client key exchange
-		this.app.get('/api/publickey', (_, res) => {
+		this.app.get('/api/server_certificate', (_, res) => {
 			try {
-				const publicKeyData = this.serverKeys.rsaPublicSigningKey;
-				res.json(publicKeyData);
-				console.log('* RSA public key sent to client');
+				const certificate = this.serverCert;
+				res.json(certificate);
+				console.log('* Server certificate sent to client');
 			} catch (error) {
-				console.error('❌ Error sending RSA public key:', error);
-				res.status(500).json({ error: 'Failed to get RSA public key' });
+				console.error('❌ Error sending certificate', error);
+				res.status(500).json({ error: 'Failed to get certificate' });
 			}
 		});
 
