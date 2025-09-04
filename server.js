@@ -45,11 +45,7 @@ class ConsentCryptoServer {
 		const cert = forge.pki.certificateFromPem(certPem);
 		const publicKey = forge.pki.publicKeyToPem(cert.publicKey);
 
-		console.log(publicKey);
-
 		const privateKey = fs.readFileSync('server.key', 'utf8');
-
-		console.log(privateKey);
 
 		this.serverKeys.rsaPrivateSigningKey = privateKey;
 		this.serverKeys.rsaPublicSigningKey = publicKey;
@@ -197,7 +193,7 @@ class ConsentCryptoServer {
 		return sign.sign({
 			key: this.serverKeys.rsaPrivateSigningKey,
 			padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-			saltLength: 32 // falhava aqui
+			saltLength: 32
 		});
 	}
 
