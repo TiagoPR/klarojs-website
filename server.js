@@ -50,8 +50,6 @@ class ConsentCryptoServer {
 		this.serverKeys.rsaPrivateSigningKey = privateKey;
 		this.serverKeys.rsaPublicSigningKey = publicKey;
 		this.serverCert = certPem;
-
-		console.log(`📝 RSA Signing Key Size: ${CONFIG.RSA_KEY_SIZE} bits`);
 	}
 
 	setupMiddleware() {
